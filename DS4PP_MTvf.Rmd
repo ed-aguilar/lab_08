@@ -1,0 +1,291 @@
+---
+title: "DS4PP MT Project"
+author: "Eduardo Aguilar, Julian Hayes, Andy Yewdell"
+date: "3/18/2020"
+output: html_document
+---
+
+```{r librarynload, warning = FALSE}
+library(tidyverse)
+library(readxl)
+library(ggrepel)
+
+url <- "https://www.bls.gov/ncs/ebs/benefits/2019/employee-benefits-in-the-united-states-dataset.xlsx"
+destfile <- "employee_benefits_in_the_united_states_dataset.xlsx"
+curl::curl_download(url, destfile)
+bls_ncs <- read_excel(destfile, sheet = "March_2010_2019")
+
+bls_ncs %>% 
+  mutate(Year = as.numeric(Year))->bls_ncs
+
+```
+
+
+```{r string setup}
+worker_type <- c("Civilian workers") #Sets type of worker from all civilian or the private/state-local gov't sub categories
+cut_type <- c("All workers", "Establishment size", "Average wage category") #Sets the cut of the data (ex. industry, wage level, bargaining status)
+benefit_type_list <- c("Paid sick leave", "Paid vacation", "Other")
+data_type <- c("Percent of workers with access") #Sets the estimate type of interest
+prov_type <- c("Availability", "Paid personal leave")
+graph_source <- "Source: BLS national compensation survey"
+year_n<-c("2019")
+```
+
+
+```{r capitalize function}
+#Function to capitalize first letter of each word for aesthetics later (source: https://rstudio-pubs-static.s3.amazonaws.com/408658_512da947714740b99253228f084a08a9.html)
+CapStr <- function(y) {
+  c <- strsplit(y, " ")[[1]]
+  paste(toupper(substring(c, 1,1)), substring(c, 2),
+      sep="", collapse=" ")
+}
+cap_str <- function(charcter_string){
+  sapply(charcter_string, CapStr)
+}
+
+```
+
+
+```{r leave_time_series:_overall_size_wage_industry}
+
+#Pares down to just paid vacay, sick, personal leave for all civ workers with some salient sub features
+bls_ncs %>% 
+  filter(`Ownership text`%in% worker_type,
+         `Occupation text` == "All workers",
+         `Job characteristic category` %in% cut_type,
+         `Estimate text` %in% paste("Leave benefits:", benefit_type_list, sep = " "),
+         `Data type text` %in% data_type,
+         `Provision text` %in% prov_type) %>% 
+  
+   mutate(leave_factor = as.factor(case_when(`Estimate text` == "Leave benefits: Other" ~ "Personal",
+                                            `Estimate text` == "Leave benefits: Paid sick leave" ~ "Sick",
+                                            `Estimate text` == "Leave benefits: Paid vacation" ~ "Vacation")))->leave_filtered                                    
+
+#Pares down to all civilian workers for overview stats (nb: 2017 personal leave data missing) 
+leave_filtered%>% 
+  filter(`Industry text` == "All workers",
+         `Job characteristic category` == "All workers") -> leave_overview
+  leave_overview %>%
+  ggplot(aes(x = Year,
+             y = Estimate,
+             color = leave_factor)) +
+    geom_line() +
+    geom_text(data = leave_overview %>% filter(Year == 2019 & leave_factor != "Vacation"),
+              aes(y = Estimate - 5, x = 2018.5, label = leave_factor),
+              size = 3.5) +
+    geom_text(data = leave_overview %>% filter(Year == 2019 & leave_factor == "Vacation"),
+              aes(y = Estimate + 5, x = 2018.5, label = leave_factor),
+              size = 3.5) +
+    labs(title = "Paid Leave Over the Past Decade",
+         y = data_type,
+         x = "",
+         caption = graph_source) +
+    scale_y_continuous(breaks = seq(0, 100, 10),
+                       limits = c(0, 100)) +
+    scale_x_continuous(breaks = seq(2010, 2019, 1),
+                 limits = c(2010, 2019)) +
+    theme(panel.grid.minor.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(color = "grey", linetype = "dotted"),
+          panel.background = element_rect(fill = "white"),
+          axis.ticks.y = element_blank(),
+          legend.position = "none")-> graph
+  
+  ggsave(filename = "graphs_overview_all",
+         plot = graph,
+         device = "jpg")
+  print(graph)
+  
+```
+
+
+
+```{r}
+leave_list <- c("Personal", "Sick", "Vacation")
+wrap_list <- c("Establishment Size", "Average Wage Category", "Industry")
+label_list <- c("`11", "`15", "`19")
+
+leave_filtered %>% 
+  mutate(wrap_factor = as.factor(cap_str(if_else(`Industry text` == "All workers",
+                                          `Job characteristic category`,
+                                          "Industry")))) %>%
+ mutate(color_factor = as.factor(if_else(`Industry text` == "All workers",
+                                          `Job characteristic text`,
+                                          `Industry text`))) -> leave_cat_overview
+
+for (leave_type in leave_list) {
+  leave_cat_overview %>% 
+    filter(leave_type == leave_factor) -> df
+  assign(leave_type, df)
+  
+    df %>%
+      ggplot(aes(x = Year,
+                 y = Estimate,
+                 color = color_factor)) +
+      geom_line() +
+      facet_wrap(~ wrap_factor,
+                 nrow = 1) +
+      labs(title = paste0("Leave Benefits: Paid ", leave_type),
+         y = data_type,
+         x = "",
+         caption = graph_source) +
+    scale_y_continuous(breaks = seq(0, 100, 10),
+                       limits = c(0, 100)) +
+    scale_x_continuous(breaks = seq(2011, 2019, 4),
+                       limits = c(2010, 2019),
+                       labels = label_list) +
+    theme(panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(color = "grey", linetype = "dotted"),
+          panel.background = element_rect(fill = "white"),
+          axis.ticks.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_rect(fill = "white"),
+          strip.text = element_text(face = "bold")) -> graph
+  
+  ggsave(filename = paste("graphs_overview", leave_type, sep = "_"),
+         plot = graph,
+         device = "jpg")
+  print(graph)
+}
+
+```
+
+
+
+```{r}
+keep_quartiles <- c("Within the lowest 25 percent", "Within the second 25 percent", "Within the third 25 percent", "Within the highest 25 percent")
+
+#Pares down to all civilian workers for overview stats (nb: 2017 personal leave data missing) 
+leave_filtered %>% 
+  filter(`Industry text` == "All workers",
+         `Job characteristic category` == "Average wage category",
+         `Job characteristic text` %in% keep_quartiles,
+         Year == 2019) %>% 
+  mutate(wage_level = as.factor(case_when(`Job characteristic text` == "Within the lowest 25 percent" ~ "Bottom",
+                                `Job characteristic text` == "Within the second 25 percent" ~ "2nd",
+                                `Job characteristic text` == "Within the third 25 percent" ~ "3rd",
+                                `Job characteristic text` == "Within the highest 25 percent" ~ "Top"))) -> leave_wage
+
+leave_wage$wage_level <- factor(leave_wage$wage_level, levels = c("Bottom", "2nd", "3rd", "Top"))
+
+leave_wage%>%
+  ggplot(aes(x = wage_level,
+             y = Estimate,
+             fill=wage_level
+           )) +
+    geom_col() +
+    labs(title = "Leave Benefits by Occupation Wage Quartile",
+         y = data_type,
+         x = "",
+         fill="",
+         caption = graph_source) +
+    scale_fill_viridis_d()+
+    facet_wrap(~leave_factor)+
+   theme(panel.grid.minor.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(color = "grey", linetype = "dotted"),
+          panel.background = element_rect(fill = "white"),
+          axis.ticks.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_rect(fill = "white"),
+          strip.text = element_text(face = "bold")) -> graph_wage_occ
+
+  ggsave(filename = paste("graphs_wage_occ"),
+         plot = graph_wage_occ,
+         device = "jpg")
+  print(graph_wage_occ)
+```
+
+
+```{r}
+firm_size <- c("Less than 50 workers", "50-99 workers", "100-499 workers", "500 workers or more")
+
+leave_filtered %>% 
+  filter(`Industry text` == "All workers",
+         `Job characteristic category`== "Establishment size", 
+         `Job characteristic text`%in% firm_size,
+         Year == 2019) %>% 
+  mutate(size_level = as.factor(case_when(`Job characteristic text` == "Less than 50 workers" ~ "0-49",
+                                `Job characteristic text` == "50-99 workers" ~ "50-99",
+                                `Job characteristic text` == "100-499 workers" ~ "100-499",
+                                `Job characteristic text` == "500 workers or more" ~ "500+"))) -> leave_size
+
+leave_size$size_level <- factor(leave_size$size_level, levels = c("0-49", "50-99", "100-499", "500+"))
+  
+leave_size%>%
+  ggplot(aes(x = size_level,
+             y = Estimate,
+             fill=size_level
+           )) +
+    geom_col() +
+    labs(title = "Leave Benefits by Establishment Headcount",
+         y = data_type,
+         x = "",
+         fill="",
+         caption = graph_source) +
+    scale_fill_viridis_d()+
+    scale_y_continuous(breaks = seq(0, 100, 10),
+                       limits = c(0, 100)) +
+    facet_wrap(~leave_factor)+
+    theme(panel.grid.minor.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(color = "grey", linetype = "dotted"),
+          panel.background = element_rect(fill = "white"),
+          axis.ticks.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_rect(fill = "white"),
+          strip.text = element_text(face = "bold")) -> graphs_leave_size
+
+ ggsave(filename = "graphs_leave_size",
+         plot = graphs_leave_size,
+         device = "jpg")
+  print(graphs_leave_size)
+```
+
+
+```{r}
+
+leave_filtered %>% 
+  mutate(`Industry text`=`Industry text` %>% 
+        fct_collapse(
+        "Universities and colleges"=c("Junior colleges, colleges, universities, and professional schools"))) %>% 
+  filter(`Industry text` != c("All workers"),
+         `Job characteristic category`== "All workers", 
+         Year == 2019)-> leave_industry
+
+#leave_size$size_level <- factor(leave_size$size_level, levels = c("0-49", "50-99", "100-499", "500+"))
+
+leave_industry%>%
+  mutate(industry=fct_reorder(`Industry text`,Estimate,.desc=TRUE)) %>% 
+  ggplot(aes(x = industry,
+             y = Estimate,
+             fill=industry
+           )) +
+    geom_col() +
+    labs(title = "Leave Benefits by Industry Type",
+         y = "Percent of workers with access",
+         x = "",
+         fill="",
+         caption = graph_source) +
+    scale_fill_viridis_d()+
+    scale_y_continuous(breaks = seq(0, 100, 10),
+                       limits = c(0, 100)) +
+    facet_wrap(~leave_factor)+
+    theme(panel.grid.minor.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(color = "grey", linetype = "dotted"),
+          panel.background = element_rect(fill = "white"),
+          axis.ticks.y = element_blank(),
+          axis.ticks.x = element_blank(),
+          legend.position = "none",
+          axis.text.x = element_text(angle = 90, hjust = 1),
+          strip.background = element_rect(fill = "white"),
+          strip.text = element_text(face = "bold")) -> graphs_leave_ind
+
+ ggsave(filename = "graphs_leave_ind",
+         plot = graphs_leave_ind,
+         device = "png")
+  print(graphs_leave_ind)
+```
+
+
